@@ -13,28 +13,24 @@ jobs:
   shell:
     if: ${{ github.event.inputs.enable_debug == 'true' || github.event.inputs.enable_debug == true }}
     runs-on: ubuntu-latest
-    timeout-minutes: 60            # how long each job can live
+    timeout-minutes: 60
     strategy:
       matrix:
-        idx: [1,2,3,4,5,6,7,8,9,10,
-              11,12,13,14,15,16,17,18,19,20]
-      # Set this to your plan's concurrency or lower to avoid queueing
+        idx: [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20]
       max-parallel: 20
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
       - name: Print which shell this is
-        run: echo "Opening SSH shell #${{ matrix.idx }} (job ${{ github.job }})"
+        run: echo "Opening SSH shell #${{ matrix.idx }}"
 
-      - name: Start tmate session (SSH + web terminal)
+      - name: Start tmate session (SSH + web)
         uses: mxschmitt/action-tmate@v3
         with:
-          limit-access-to-actor: true   # only the person who triggered the workflow can connect
-          sudo: false                   # change to true only if you really need sudo in the session
+          limit-access-to-actor: true
+          sudo: false
 
-      # Optional: keep the job alive a short while after tmate stops (helpful for debug)
       - name: Short hold to allow manual cleanup
         if: always()
         run: sleep 10
