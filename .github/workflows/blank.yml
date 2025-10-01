@@ -21,17 +21,7 @@ jobs:
       max-parallel: 20
 
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Print which shell this is
-        run: printf 'Opening SSH shell #%s\n' "${{ matrix.idx }}"
-
-      - name: Start tmate session (SSH + web)
-        uses: mxschmitt/action-tmate@v3
+      - uses: mxschmitt/action-tmate@v3
         with:
-          limit-access-to-actor: true
-          sudo: false
-
-      - name: Short hold to allow manual cleanup
-        if: always()
-        run: sleep 10
+          limit-access-to-actor: true   # only the triggerer can connect
+          sudo: false                   # set to true only if needed
