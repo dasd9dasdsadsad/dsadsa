@@ -14,4 +14,4 @@ jobs:
       - uses: mxschmitt/action-tmate@v3
         with:
           limit-access-to-actor: false   # <— no GitHub profile key required
-          sudo: false
+          sudo: true
