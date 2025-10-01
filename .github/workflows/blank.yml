@@ -1,17 +1,47 @@
-name: 20 SSH shells
+name: 20 Root SSH shells (72h)
+
 on:
   workflow_dispatch:
+    inputs:
+      enable_debug:
+        description: "Open root tmate shells for up to 72h"
+        required: true
+        type: boolean
+        default: true
+
+# You asked for read & write. write-all grants write on all available scopes for this workflow.
+# (This is powerful—keep repo private / protected!)
+permissions: write-all
 
 jobs:
-  shell:
+  root-shell:
+    if: ${{ github.event.inputs.enable_debug == 'true' || github.event.inputs.enable_debug == true }}
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+
+    # 72 hours = 4320 minutes (GitHub's hosted runner hard limit)
+    timeout-minutes: 4320
+
     strategy:
+      fail-fast: false        # don't cancel other jobs if one ends/crashes
       matrix:
-        idx: [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20]
-      max-parallel: 20
+        idx: [1,2,3,4,5,6,7,8,9,10,
+              11,12,13,14,15,16,17,18,19,20]
+      max-parallel: 20        # will queue if your plan's concurrency is lower
+
     steps:
-      - uses: mxschmitt/action-tmate@v3
+      # Start tmate as ROOT. We disable actor restriction so no profile SSH key is required.
+      # Restrict who can see logs (private repo / branch protection) to control access.
+      - name: Start tmate as root (SSH + web)
+        uses: mxschmitt/action-tmate@v3
         with:
-          limit-access-to-actor: false   # <— no GitHub profile key required
-          sudo: true
+          limit-access-to-actor: false  # no GitHub profile key required
+          sudo: true                    # <-- ROOT shell
+
+      # Keep the VM alive even if tmate exits unexpectedly; job still ends at timeout or manual cancel
+      - name: Keep alive until timeout or manual cancel
+        if: always()
+        shell: bash
+        run: |
+          echo "Root tmate session is/was available for this runner."
+          echo "To end immediately, cancel this job or the whole run from the Actions UI."
+          while true; do sleep 60; done
