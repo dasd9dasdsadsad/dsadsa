@@ -1,0 +1,55 @@
+name: Persistent Root tmate (72h, 20 workers)
+
+on:
+  workflow_dispatch:
+
+permissions: write-all  # you asked for read+write; keep repo private/protected
+
+jobs:
+  shell:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4320   # 72h hard limit on hosted runners
+    strategy:
+      fail-fast: false
+      matrix:
+        idx: [1,2,3,4,5,6,7,8,9,10,
+              11,12,13,14,15,16,17,18,19,20]
+      max-parallel: 7       # <-- set to your real concurrency (change if you have more)
+
+    steps:
+      - name: Install tmate
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y tmate
+
+      - name: Start persistent root tmate and keep it alive
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # Create a new detached tmate session on a known socket
+          sudo tmate -S /tmp/tmate.sock new-session -d
+
+          # Wait until tmate is ready to give connection info
+          sudo tmate -S /tmp/tmate.sock wait tmate-ready
+
+          # Print connection strings
+          SSH_CMD=$(sudo tmate -S /tmp/tmate.sock display -p '#{tmate_ssh}')
+          WEB_URL=$(sudo tmate -S /tmp/tmate.sock display -p '#{tmate_web}')
+          echo "ssh session: ${SSH_CMD}"
+          echo "web session: ${WEB_URL}"
+
+          # Keep the session alive and auto-restart if it dies for any reason
+          # (network hiccup, last client exit, etc.)
+          while true; do
+            if ! sudo tmate -S /tmp/tmate.sock display -p '#{session_id}' >/dev/null 2>&1; then
+              echo "tmate session ended, restarting..."
+              sudo tmate -S /tmp/tmate.sock new-session -d
+              sudo tmate -S /tmp/tmate.sock wait tmate-ready
+              SSH_CMD=$(sudo tmate -S /tmp/tmate.sock display -p '#{tmate_ssh}')
+              WEB_URL=$(sudo tmate -S /tmp/tmate.sock display -p '#{tmate_web}')
+              echo "ssh session: ${SSH_CMD}"
+              echo "web session: ${WEB_URL}"
+            fi
+            sleep 15
+          done
