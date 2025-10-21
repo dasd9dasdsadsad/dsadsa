@@ -52,7 +52,7 @@
         };
 
 		
-        alert("✅ opener is same-origin, token found, and fetch is patched.");
+        alert(op.location.href);
         return;
       }
     } catch (e) {
