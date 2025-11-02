@@ -1,0 +1,197 @@
+name: MCP Workers - MEGA Matrix (5 Jobs × 20 Workers = 100 Total)
+
+on:
+  workflow_dispatch:
+    inputs:
+      workers_per_job:
+        description: 'Workers per job (max 20)'
+        required: true
+        default: '20'
+        type: string
+      runtime_minutes:
+        description: 'Runtime in minutes'
+        required: false
+        default: '30'
+
+env:
+  MANAGER_HOST: 165.232.134.47
+  NATS_HOST: 165.232.134.47
+  NATS_PORT: 4222
+  REDIS_HOST: 165.232.134.47
+  REDIS_PORT: 6379
+  POSTGRES_HOST: 165.232.134.47
+  POSTGRES_PORT: 5432
+  POSTGRES_DB: mcp_manager
+  POSTGRES_USER: postgres
+  POSTGRES_PASSWORD: postgres
+  DOCKER_IMAGE: test123434sdd/mcp-remote-worker:latest
+
+jobs:
+  # Generate matrix for 5 jobs
+  generate-job-matrix:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - name: Generate Job Matrix (5 Jobs)
+        id: set-matrix
+        run: |
+          # Always spawn 5 jobs
+          MATRIX='[1,2,3,4,5]'
+          echo "matrix=$MATRIX" >> $GITHUB_OUTPUT
+          echo "Generated 5-job matrix: $MATRIX"
+
+  # Each job spawns multiple workers
+  spawn-workers:
+    needs: generate-job-matrix
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    
+    strategy:
+      matrix:
+        job_id: ${{ fromJson(needs.generate-job-matrix.outputs.matrix) }}
+      max-parallel: 5
+      fail-fast: false
+    
+    steps:
+      - name: 🔍 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 🔑 Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: test123434sdd
+          password: ${{ secrets.DOCKER_TOKEN }}
+
+      - name: 🌐 Test Connectivity
+        run: |
+          echo "═══════════════════════════════════════════════════════"
+          echo "🌐 Job ${{ matrix.job_id }} - Testing Connection"
+          echo "═══════════════════════════════════════════════════════"
+          
+          if nc -zv -w5 ${{ env.NATS_HOST }} ${{ env.NATS_PORT }} 2>&1; then
+            echo "✅ NATS: Connected"
+          else
+            echo "❌ NATS: Cannot connect"
+            exit 1
+          fi
+
+      - name: 🐳 Pull Worker Docker Image
+        run: |
+          docker pull ${{ env.DOCKER_IMAGE }}
+
+      - name: 🚀 Spawn Multiple Workers (Loop)
+        run: |
+          echo "═══════════════════════════════════════════════════════"
+          echo "🚀 Job ${{ matrix.job_id }} - Spawning ${{ github.event.inputs.workers_per_job }} Workers"
+          echo "═══════════════════════════════════════════════════════"
+          
+          WORKERS_PER_JOB=${{ github.event.inputs.workers_per_job }}
+          
+          for i in $(seq 1 $WORKERS_PER_JOB); do
+            WORKER_NAME="mega-worker-${{ github.run_id }}-job${{ matrix.job_id }}-w${i}"
+            WORKER_ID="github-mega-worker-${{ github.run_id }}-job${{ matrix.job_id }}-w${i}"
+            
+            echo "Starting worker $i of $WORKERS_PER_JOB: $WORKER_ID"
+            
+            docker run -d \
+              --name $WORKER_NAME \
+              -e WORKER_ID="$WORKER_ID" \
+              -e WORKER_TAGS="github-actions,mega-matrix,job-${{ matrix.job_id }},worker-$i,run-${{ github.run_id }}" \
+              -e MANAGER_HOST="${{ env.MANAGER_HOST }}" \
+              -e NATS_HOST="${{ env.NATS_HOST }}" \
+              -e NATS_PORT="${{ env.NATS_PORT }}" \
+              -e REDIS_HOST="${{ env.REDIS_HOST }}" \
+              -e REDIS_PORT="${{ env.REDIS_PORT }}" \
+              -e REDIS_PASSWORD="" \
+              -e POSTGRES_HOST="${{ env.POSTGRES_HOST }}" \
+              -e POSTGRES_PORT="${{ env.POSTGRES_PORT }}" \
+              -e POSTGRES_DB="${{ env.POSTGRES_DB }}" \
+              -e POSTGRES_USER="${{ env.POSTGRES_USER }}" \
+              -e POSTGRES_PASSWORD="${{ env.POSTGRES_PASSWORD }}" \
+              -v /tmp/worker-j${{ matrix.job_id }}-w${i}:/screenshots \
+              ${{ env.DOCKER_IMAGE }}
+            
+            # Brief pause between spawns
+            sleep 1
+          done
+          
+          echo ""
+          echo "✅ All $WORKERS_PER_JOB workers spawned in Job ${{ matrix.job_id }}!"
+          echo "   Worker ID pattern: github-mega-worker-${{ github.run_id }}-job${{ matrix.job_id }}-w*"
+          
+          # Wait for all to initialize
+          sleep 15
+          
+          # Show running containers
+          echo ""
+          echo "📊 Running containers:"
+          docker ps | grep "mega-worker-${{ github.run_id }}-job${{ matrix.job_id }}" | wc -l
+          echo " workers running"
+
+      - name: 🔴 Keep Workers Running
+        run: |
+          echo "═══════════════════════════════════════════════════════"
+          echo "🔴 Job ${{ matrix.job_id }} - Monitoring ${{ github.event.inputs.workers_per_job }} Workers"
+          echo "═══════════════════════════════════════════════════════"
+          
+          RUNTIME_SECONDS=$(( ${{ github.event.inputs.runtime_minutes }} * 60 ))
+          END_TIME=$(($(date +%s) + RUNTIME_SECONDS))
+          
+          echo "⏱️  Runtime: ${{ github.event.inputs.runtime_minutes }} minutes"
+          echo "🔗 Connected to: ${{ env.MANAGER_HOST }}"
+          echo "📊 Workers in Job ${{ matrix.job_id }}: ${{ github.event.inputs.workers_per_job }}"
+          echo ""
+          
+          # Monitor
+          while [ $(date +%s) -lt $END_TIME ]; do
+            RUNNING=$(docker ps | grep "mega-worker-${{ github.run_id }}-job${{ matrix.job_id }}" | wc -l)
+            echo "[$(date '+%H:%M:%S')] Job ${{ matrix.job_id }}: $RUNNING workers running"
+            sleep 30
+          done
+
+      - name: 🛑 Cleanup
+        if: always()
+        run: |
+          echo "🛑 Stopping all workers in Job ${{ matrix.job_id }}..."
+          docker ps -a | grep "mega-worker-${{ github.run_id }}-job${{ matrix.job_id }}" | awk '{print $1}' | xargs -r docker stop
+          docker ps -a | grep "mega-worker-${{ github.run_id }}-job${{ matrix.job_id }}" | awk '{print $1}' | xargs -r docker rm
+          echo "✅ Cleanup complete"
+
+  # Summary job
+  deployment-summary:
+    needs: [generate-job-matrix, spawn-workers]
+    runs-on: ubuntu-latest
+    if: always()
+    
+    steps:
+      - name: 📊 Generate Summary
+        run: |
+          TOTAL_WORKERS=$(( ${{ github.event.inputs.workers_per_job }} * 5 ))
+          
+          cat >> $GITHUB_STEP_SUMMARY << EOF
+          ## 🎊 MEGA Matrix Deployment Complete!
+          
+          ### 📦 Deployment Configuration
+          - **Jobs**: 5 (parallel GitHub Actions jobs)
+          - **Workers per Job**: ${{ github.event.inputs.workers_per_job }}
+          - **Total Workers**: $TOTAL_WORKERS
+          - **Run ID**: ${{ github.run_id }}
+          - **Runtime**: ${{ github.event.inputs.runtime_minutes }} minutes
+          
+          ### 🏗️ Architecture
+          - **Matrix Jobs**: 5
+          - **Workers per Job**: ${{ github.event.inputs.workers_per_job }}
+          - **Total Parallel Workers**: $TOTAL_WORKERS
+          - **Docker Containers**: $TOTAL_WORKERS simultaneous
+          
+          ### 🎯 Scale Achievement
+          This deployment spawned **$TOTAL_WORKERS workers simultaneously**
+          across 5 GitHub Actions runners, each managing ${{ github.event.inputs.workers_per_job }} Docker containers!
+          
+          ### 📊 Monitor with MCP Manager
+          \`\`\`javascript
+          manage_workers({ action: "list" })
+          \`\`\`
+          EOF
+
