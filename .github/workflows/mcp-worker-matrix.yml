@@ -1,0 +1,212 @@
+name: MCP Workers - Matrix with Real-Time Logs
+
+on:
+  workflow_dispatch:
+    inputs:
+      num_workers:
+        description: 'Number of workers (1-20)'
+        required: true
+        default: '5'
+        type: choice
+        options: ['1', '2', '3', '4', '5', '10', '20']
+      runtime_minutes:
+        description: 'Runtime in minutes'
+        required: false
+        default: '30'
+
+env:
+  MANAGER_HOST: 165.232.134.47
+  NATS_HOST: 165.232.134.47
+  NATS_PORT: 4222
+  REDIS_HOST: 165.232.134.47
+  REDIS_PORT: 6379
+  POSTGRES_HOST: 165.232.134.47
+  POSTGRES_PORT: 5432
+  POSTGRES_DB: mcp_manager
+  POSTGRES_USER: postgres
+  POSTGRES_PASSWORD: postgres
+  DOCKER_IMAGE: test123434sdd/mcp-remote-worker:latest
+
+jobs:
+  generate-matrix:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - name: Generate Worker Matrix
+        id: set-matrix
+        run: |
+          NUM_WORKERS=${{ github.event.inputs.num_workers }}
+          echo "Generating matrix for $NUM_WORKERS workers"
+          MATRIX=$(seq 1 $NUM_WORKERS | jq -R -s -c 'split("\n")[:-1] | map(tonumber)')
+          echo "matrix=$MATRIX" >> $GITHUB_OUTPUT
+
+  spawn-workers:
+    needs: generate-matrix
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    
+    strategy:
+      matrix:
+        worker_id: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
+      max-parallel: 20
+      fail-fast: false
+    
+    steps:
+      - name: 🔍 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 🔑 Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: test123434sdd
+          password: ${{ secrets.DOCKER_TOKEN }}
+
+      - name: 🌐 Test Connectivity
+        run: |
+          echo "═══════════════════════════════════════════════════════"
+          echo "🌐 Worker ${{ matrix.worker_id }} - Testing Connection"
+          echo "═══════════════════════════════════════════════════════"
+          
+          if nc -zv -w5 ${{ env.NATS_HOST }} ${{ env.NATS_PORT }} 2>&1; then
+            echo "✅ NATS: Connected"
+          else
+            echo "❌ NATS: Cannot connect"
+            exit 1
+          fi
+          
+          if nc -zv -w5 ${{ env.POSTGRES_HOST }} ${{ env.POSTGRES_PORT }} 2>&1; then
+            echo "✅ PostgreSQL: Connected"
+          else
+            echo "❌ PostgreSQL: Cannot connect"
+            exit 1
+          fi
+
+      - name: 🐳 Pull Worker Docker Image
+        run: |
+          docker pull ${{ env.DOCKER_IMAGE }}
+
+      - name: 🚀 Start Worker Container
+        run: |
+          echo "═══════════════════════════════════════════════════════"
+          echo "🚀 Starting Worker ${{ matrix.worker_id }}"
+          echo "═══════════════════════════════════════════════════════"
+          
+          WORKER_NAME="matrix-worker-${{ github.run_id }}-${{ matrix.worker_id }}"
+          WORKER_ID="github-matrix-worker-${{ github.run_id }}-${{ matrix.worker_id }}"
+          
+          docker run -d \
+            --name $WORKER_NAME \
+            -e WORKER_ID="$WORKER_ID" \
+            -e WORKER_TAGS="github-actions,matrix,worker-${{ matrix.worker_id }},run-${{ github.run_id }}" \
+            -e MANAGER_HOST="${{ env.MANAGER_HOST }}" \
+            -e NATS_HOST="${{ env.NATS_HOST }}" \
+            -e NATS_PORT="${{ env.NATS_PORT }}" \
+            -e REDIS_HOST="${{ env.REDIS_HOST }}" \
+            -e REDIS_PORT="${{ env.REDIS_PORT }}" \
+            -e REDIS_PASSWORD="" \
+            -e POSTGRES_HOST="${{ env.POSTGRES_HOST }}" \
+            -e POSTGRES_PORT="${{ env.POSTGRES_PORT }}" \
+            -e POSTGRES_DB="${{ env.POSTGRES_DB }}" \
+            -e POSTGRES_USER="${{ env.POSTGRES_USER }}" \
+            -e POSTGRES_PASSWORD="${{ env.POSTGRES_PASSWORD }}" \
+            -v /tmp/worker-${{ matrix.worker_id }}:/screenshots \
+            ${{ env.DOCKER_IMAGE }}
+          
+          echo "✅ Worker ${{ matrix.worker_id }} started!"
+          echo "   Container: $WORKER_NAME"
+          echo "   Worker ID: $WORKER_ID"
+          
+          # Wait for container to initialize
+          sleep 10
+
+      - name: 📋 Show Initial Container Logs
+        run: |
+          WORKER_NAME="matrix-worker-${{ github.run_id }}-${{ matrix.worker_id }}"
+          echo "═══════════════════════════════════════════════════════"
+          echo "📋 Worker ${{ matrix.worker_id }} - Initial Logs (Last 50 lines)"
+          echo "═══════════════════════════════════════════════════════"
+          docker logs --tail 50 $WORKER_NAME 2>&1 || echo "No logs available yet"
+
+      - name: 🔴 Keep Worker Running with Live Logs
+        run: |
+          echo "═══════════════════════════════════════════════════════"
+          echo "🔴 Worker ${{ matrix.worker_id }} Running - Live Monitoring"
+          echo "═══════════════════════════════════════════════════════"
+          
+          RUNTIME_SECONDS=$(( ${{ github.event.inputs.runtime_minutes }} * 60 ))
+          END_TIME=$(($(date +%s) + RUNTIME_SECONDS))
+          WORKER_NAME="matrix-worker-${{ github.run_id }}-${{ matrix.worker_id }}"
+          
+          echo "⏱️  Runtime: ${{ github.event.inputs.runtime_minutes }} minutes"
+          echo "🔗 Connected to: ${{ env.MANAGER_HOST }}"
+          echo "📊 Worker ID: github-matrix-worker-${{ github.run_id }}-${{ matrix.worker_id }}"
+          echo ""
+          
+          # Monitor with periodic log output
+          COUNTER=0
+          while [ $(date +%s) -lt $END_TIME ]; do
+            if ! docker ps | grep -q $WORKER_NAME; then
+              echo "❌ Worker ${{ matrix.worker_id }} stopped unexpectedly"
+              echo "📋 Last 100 log lines:"
+              docker logs --tail 100 $WORKER_NAME 2>&1
+              exit 1
+            fi
+            
+            # Show logs every 30 seconds
+            echo "[$(date '+%H:%M:%S')] Worker ${{ matrix.worker_id }}: Running"
+            
+            # Show recent logs every 2 minutes
+            if [ $((COUNTER % 4)) -eq 0 ]; then
+              echo "📋 Recent logs (last 20 lines):"
+              docker logs --tail 20 $WORKER_NAME 2>&1 | sed 's/^/   /'
+              echo ""
+            fi
+            
+            COUNTER=$((COUNTER + 1))
+            sleep 30
+          done
+
+      - name: 📝 Final Worker Summary
+        if: always()
+        run: |
+          WORKER_NAME="matrix-worker-${{ github.run_id }}-${{ matrix.worker_id }}"
+          
+          echo "═══════════════════════════════════════════════════════"
+          echo "📝 Worker ${{ matrix.worker_id }} - Final Summary"
+          echo "═══════════════════════════════════════════════════════"
+          echo "Runtime: ${SECONDS} seconds"
+          echo "Worker ID: github-matrix-worker-${{ github.run_id }}-${{ matrix.worker_id }}"
+          echo ""
+          echo "📋 Complete Container Logs:"
+          echo "═══════════════════════════════════════════════════════"
+          docker logs $WORKER_NAME 2>&1 || echo "No logs available"
+
+      - name: 🛑 Cleanup
+        if: always()
+        run: |
+          WORKER_NAME="matrix-worker-${{ github.run_id }}-${{ matrix.worker_id }}"
+          docker stop $WORKER_NAME || true
+          docker rm $WORKER_NAME || true
+
+  deployment-summary:
+    needs: [generate-matrix, spawn-workers]
+    runs-on: ubuntu-latest
+    if: always()
+    
+    steps:
+      - name: 📊 Generate Summary
+        run: |
+          cat >> $GITHUB_STEP_SUMMARY << EOF
+          ## 🎊 Matrix Worker Deployment Complete!
+          
+          - **Workers**: ${{ github.event.inputs.num_workers }}
+          - **Runtime**: ${{ github.event.inputs.runtime_minutes }} minutes
+          - **Run ID**: ${{ github.run_id }}
+          
+          ### 📊 Monitor with MCP Manager:
+          \`\`\`javascript
+          manage_workers({ action: "list" })
+          \`\`\`
+          EOF
+
