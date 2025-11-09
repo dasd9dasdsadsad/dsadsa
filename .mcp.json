@@ -1,8 +1,14 @@
 {
   "mcpServers": {
-    "my-custom-server": {
+    "mcp-worker-tools": {
       "transport": "http",
-      "url": "https://YOUR-MCP-URL-HERE.com"
+      "url": "NEED_WORKER_TOOLS_URL",
+      "description": "Worker communication tools - report_progress, report_milestone, ask_manager, report_analytics, report_heartbeat"
+    },
+    "domlogger-unified": {
+      "transport": "http",
+      "url": "NEED_DOMLOGGER_URL",
+      "description": "Browser automation tools - browser_navigate, take_screenshot, list_network_requests, list_console_messages, get_performance_metrics"
     }
   }
 }
