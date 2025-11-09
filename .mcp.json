@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "my-custom-server": {
+      "transport": "http",
+      "url": "https://YOUR-MCP-URL-HERE.com"
+    }
+  }
+}
