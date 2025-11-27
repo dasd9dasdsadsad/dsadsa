@@ -1,0 +1,2 @@
+# blognote
+justblog

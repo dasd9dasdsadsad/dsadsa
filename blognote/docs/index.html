@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Security Research</title>
+    <meta name="description" content="Bug bounty writeups, vulnerability research, and security analysis.">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body class="home-page">
+    <div class="grain-overlay"></div>
+
+    <nav class="navbar glass">
+        <div class="nav-content">
+            <a href="/" class="logo glitch" data-text="SECURITY">SECURITY</a>
+            <button class="theme-toggle" id="themeToggle" aria-label="Toggle theme">
+                <svg class="sun-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="12" cy="12" r="5"></circle>
+                    <path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"></path>
+                </svg>
+                <svg class="moon-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+                </svg>
+            </button>
+        </div>
+    </nav>
+
+    <main class="home-container">
+        <!-- Hero Section -->
+        <section class="hero-section">
+            <div class="hero-bg">
+                <div class="grid-lines"></div>
+                <div class="floating-shapes">
+                    <div class="shape shape-1"></div>
+                    <div class="shape shape-2"></div>
+                    <div class="shape shape-3"></div>
+                </div>
+            </div>
+
+            <div class="hero-content">
+                <div class="profile-image-container">
+                    <div class="profile-ring"></div>
+                    <div class="profile-ring ring-2"></div>
+                    <img src="https://pbs.twimg.com/profile_images/1580828825498595330/F5SsCD7U_400x400.jpg" alt="Profile" class="profile-image">
+                </div>
+
+                <div class="hero-text">
+                    <div class="name-container">
+                        <h1 class="hero-name">
+                            <span class="name-line">hamidonsolo</span>
+                        </h1>
+                        <div class="title-badge">
+                            <span class="badge-dot"></span>
+                            Security Researcher
+                        </div>
+                    </div>
+
+                    <p class="hero-tagline typewriter">Finding bugs. Breaking things. Getting paid.</p>
+
+                    <div class="hero-stats">
+                        <div class="hero-stat">
+                            <span class="stat-number">19</span>
+                            <span class="stat-desc">Years Old</span>
+                        </div>
+                        <div class="stat-divider"></div>
+                        <div class="hero-stat">
+                            <span class="stat-number">2</span>
+                            <span class="stat-desc">Writeups</span>
+                        </div>
+                    </div>
+
+                    <div class="hero-cta">
+                        <a href="https://x.com/hamidonsolo" target="_blank" rel="noopener" class="cta-button primary">
+                            <svg viewBox="0 0 24 24" fill="currentColor" width="18" height="18">
+                                <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/>
+                            </svg>
+                            @hamidonsolo
+                        </a>
+                        <a href="#writeups" class="cta-button secondary">
+                            View Writeups
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18">
+                                <path d="M7 17L17 7M17 7H7M17 7V17"/>
+                            </svg>
+                        </a>
+                    </div>
+                </div>
+            </div>
+
+            <div class="scroll-indicator">
+                <div class="mouse">
+                    <div class="wheel"></div>
+                </div>
+                <span>Scroll</span>
+            </div>
+        </section>
+
+        <!-- Writeups Section -->
+        <section class="writeups-section" id="writeups">
+            <div class="section-header">
+                <h2 class="section-title">
+                    <span class="title-accent">//</span> Writeups
+                </h2>
+                <p class="section-subtitle">Vulnerability research & bug bounty reports</p>
+            </div>
+
+            <div class="writeups-grid">
+                <!-- Antigravity RCE -->
+                <article class="writeup-card fade-in">
+                    <div class="card-glow"></div>
+                    <div class="card-content">
+                        <div class="writeup-header">
+                            <div class="writeup-tags">
+                                <span class="tag critical pulse">Critical</span>
+                                <span class="tag">Zero-Click</span>
+                                <span class="tag">RCE</span>
+                            </div>
+                            <span class="writeup-date">Nov 2025</span>
+                        </div>
+                        <h3 class="writeup-title">Zero-Click RCE in Google DeepMind's Antigravity</h3>
+                        <p class="writeup-excerpt">Any website could silently write files anywhere on your system. A critical vulnerability in an AI browser assistant.</p>
+                        <div class="writeup-meta">
+                            <span class="meta-item">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+                                    <circle cx="12" cy="12" r="10"></circle>
+                                    <path d="M12 6v6l4 2"></path>
+                                </svg>
+                                25 min
+                            </span>
+                            <span class="meta-item cvss">CVSS 9.8</span>
+                            <span class="meta-item dupe">Duplicate</span>
+                        </div>
+                        <a href="posts/antigravity/" class="writeup-link">
+                            Read Analysis
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
+                                <path d="M5 12h14M12 5l7 7-7 7"/>
+                            </svg>
+                        </a>
+                    </div>
+                </article>
+
+                <!-- Account Takeover -->
+                <article class="writeup-card fade-in">
+                    <div class="card-glow success"></div>
+                    <div class="card-content">
+                        <div class="writeup-header">
+                            <div class="writeup-tags">
+                                <span class="tag critical pulse">Critical</span>
+                                <span class="tag">One-Click</span>
+                                <span class="tag">ATO</span>
+                            </div>
+                            <span class="writeup-date">2025</span>
+                        </div>
+                        <h3 class="writeup-title">$6,000 Bug Bounty: One-Click Account Takeover</h3>
+                        <p class="writeup-excerpt">Client-Side Path Traversal leading to full account takeover. One click was all it took.</p>
+                        <div class="writeup-meta">
+                            <span class="meta-item">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+                                    <circle cx="12" cy="12" r="10"></circle>
+                                    <path d="M12 6v6l4 2"></path>
+                                </svg>
+                                10 min
+                            </span>
+                            <span class="meta-item cvss">CVSS 9+</span>
+                            <span class="meta-item bounty">$6,000</span>
+                        </div>
+                        <a href="posts/account-takeover/" class="writeup-link">
+                            Read Analysis
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
+                                <path d="M5 12h14M12 5l7 7-7 7"/>
+                            </svg>
+                        </a>
+                    </div>
+                </article>
+            </div>
+        </section>
+    </main>
+
+    <footer class="footer glass">
+        <div class="footer-content">
+            <span class="footer-text">Security Research</span>
+            <span class="footer-divider">|</span>
+            <a href="https://x.com/hamidonsolo" target="_blank" rel="noopener" class="footer-link">@hamidonsolo</a>
+        </div>
+    </footer>
+
+    <script src="script.js"></script>
+    <script>
+        // Counter animation
+        document.addEventListener('DOMContentLoaded', () => {
+            const counters = document.querySelectorAll('.counter');
+            counters.forEach(counter => {
+                const target = parseInt(counter.dataset.target);
+                const duration = 2000;
+                const step = target / (duration / 16);
+                let current = 0;
+
+                const timer = setInterval(() => {
+                    current += step;
+                    if (current >= target) {
+                        counter.textContent = target.toLocaleString();
+                        clearInterval(timer);
+                    } else {
+                        counter.textContent = Math.floor(current).toLocaleString();
+                    }
+                }, 16);
+            });
+
+            // Fade in on scroll
+            const observer = new IntersectionObserver((entries) => {
+                entries.forEach(entry => {
+                    if (entry.isIntersecting) {
+                        entry.target.classList.add('visible');
+                    }
+                });
+            }, { threshold: 0.1 });
+
+            document.querySelectorAll('.fade-in').forEach(el => observer.observe(el));
+        });
+    </script>
+</body>
+</html>
